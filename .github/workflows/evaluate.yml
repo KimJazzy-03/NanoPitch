@@ -206,10 +206,11 @@ jobs:
                   --output-json "$out"; then
               echo "::endgroup::"
               # Extract key metrics for the PR comment.
-              rpa=$(python -c "import json; d=json.load(open('$out')); print(d.get('rpa_realtime_clean', d.get('rpa_realtime', 'n/a')))" 2>/dev/null || echo "n/a")
-              vad=$(python -c "import json; d=json.load(open('$out')); print(d.get('vad_accuracy', 'n/a'))" 2>/dev/null || echo "n/a")
-              med=$(python -c "import json; d=json.load(open('$out')); print(d.get('median_cent_error', 'n/a'))" 2>/dev/null || echo "n/a")
-              name=$(python -c "import json; d=json.load(open('$out')); print(d.get('student_name', slug))" 2>/dev/null || echo "$slug")
+              # evaluate.py writes nested JSON: {"clean": {"realtime_rpa": 0.83, ...}, ...}
+              rpa=$(python -c "import json; d=json.load(open('$out')); v=d.get('clean',{}).get('realtime_rpa'); print(f'{v*100:.1f}%' if v is not None else 'n/a')" 2>/dev/null || echo "n/a")
+              vad=$(python -c "import json; d=json.load(open('$out')); v=d.get('clean',{}).get('vad_acc'); print(f'{v*100:.1f}%' if v is not None else 'n/a')" 2>/dev/null || echo "n/a")
+              med=$(python -c "import json; d=json.load(open('$out')); v=d.get('clean',{}).get('realtime_median_cents'); print(f'{v:.1f}¢' if v is not None else 'n/a')" 2>/dev/null || echo "n/a")
+              name=$(python -c "import json; d=json.load(open('$out')); print(d.get('student_name', '$slug'))" 2>/dev/null || echo "$slug")
               note=$(python -c "import json; d=json.load(open('$out')); print(d.get('note', ''))" 2>/dev/null || echo "")
               summary="${summary}
           ### ${name}

@@ -14,22 +14,20 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Primary sort key: realtime RPA at clean condition (most informative for students).
-# Adjust if evaluate.py uses different top-level keys.
-SORT_KEY = "rpa_realtime_clean"
-SORT_KEY_FALLBACK = "rpa_realtime"   # if per-SNR breakdown not available
+
+def get_condition(metrics: dict, condition: str, key: str):
+    """
+    Pull a value from the nested JSON structure evaluate.py writes:
+      { "clean": { "realtime_rpa": 0.83, ... }, "-5 dB": { ... }, ... }
+    """
+    return metrics.get(condition, {}).get(key)
 
 
 def extract_primary_metric(metrics: dict) -> float:
-    """Pull the single number used for ranking."""
-    # Try clean-condition realtime RPA first.
-    for key in (SORT_KEY, SORT_KEY_FALLBACK, "rpa", "rpa_offline_clean", "rpa_offline"):
-        if key in metrics and metrics[key] is not None:
-            return float(metrics[key])
-    # Fall back to any float value that looks like an accuracy.
-    for k, v in metrics.items():
-        if "rpa" in k.lower() and isinstance(v, (int, float)):
-            return float(v)
+    """Pull the single number used for ranking: realtime RPA on clean audio."""
+    val = get_condition(metrics, "clean", "realtime_rpa")
+    if val is not None:
+        return float(val)
     return 0.0
 
 
@@ -54,34 +52,34 @@ def format_cents(v) -> str:
 def build_table(entries: list[dict]) -> str:
     """Return a GitHub-flavored Markdown table."""
 
-    # Columns we want to show (label, key in JSON, formatter)
-    # Adapt these keys to match what evaluate.py actually outputs.
+    # evaluate.py condition keys: "clean", "-5 dB", "0 dB", "+5 dB", "+10 dB", "+20 dB"
+    # Each column: (header, condition or None, metric key, formatter or None)
     columns = [
-        ("Rank",               None,                        None),
-        ("Student",            "student_name",              None),
-        ("RPA Clean ↑",        "rpa_realtime_clean",        format_pct),
-        ("RPA 0 dB ↑",         "rpa_realtime_0db",          format_pct),
-        ("RPA -5 dB ↑",        "rpa_realtime_-5db",         format_pct),
-        ("VAD Acc ↑",          "vad_accuracy",              format_pct),
-        ("Median Err ↓",       "median_cent_error",         format_cents),
-        ("Note",               "note",                      None),
+        ("Rank",         None,      None,                    None),
+        ("Student",      None,      "student_name",          None),
+        ("RPA Clean ↑",  "clean",   "realtime_rpa",          format_pct),
+        ("RPA 0 dB ↑",   "0 dB",    "realtime_rpa",          format_pct),
+        ("RPA -5 dB ↑",  "-5 dB",   "realtime_rpa",          format_pct),
+        ("VAD Acc ↑",    "clean",   "vad_acc",               format_pct),
+        ("Median Err ↓", "clean",   "realtime_median_cents", format_cents),
+        ("Note",         None,      "note",                  None),
     ]
 
-    header = "| " + " | ".join(label for label, _, _ in columns) + " |"
+    header = "| " + " | ".join(label for label, _, _, _ in columns) + " |"
     sep    = "| " + " | ".join("---" for _ in columns) + " |"
     rows   = [header, sep]
 
     for rank, m in enumerate(entries, start=1):
         cells = []
-        for label, key, fmt in columns:
+        for label, condition, key, fmt in columns:
             if key is None:
                 cells.append(str(rank))
-            else:
+            elif condition is None:
                 val = m.get(key)
-                if fmt:
-                    cells.append(fmt(val))
-                else:
-                    cells.append(str(val) if val is not None else "—")
+                cells.append(str(val) if val is not None else "—")
+            else:
+                val = get_condition(m, condition, key)
+                cells.append(fmt(val) if fmt else (str(val) if val is not None else "—"))
         rows.append("| " + " | ".join(cells) + " |")
 
     return "\n".join(rows)
