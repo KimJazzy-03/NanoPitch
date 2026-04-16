@@ -29,15 +29,57 @@
     .full-width { grid-column: 1 / -1; }
     .full-width canvas { max-height: 320px; }
     @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    /* ── sortable table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    thead th {
+      background: #f0f2f5;
+      padding: 0.55rem 0.8rem;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 2px solid #d0d4da;
+    }
+    thead th:hover { background: #e4e8ee; }
+    thead th.active { background: #dce6f5; color: #1a4a8a; }
+    tbody tr { border-bottom: 1px solid #eee; }
+    tbody tr:hover { background: #f9fbff; }
+    tbody td { padding: 0.5rem 0.8rem; vertical-align: top; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.rank { text-align: center; color: #888; font-weight: 600; }
+    td.note-cell {
+      max-width: 220px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #666;
+    }
+    .swatch { display: inline-block; width: 10px; height: 10px;
+               border-radius: 2px; margin-right: 5px; vertical-align: middle; }
   </style>
 </head>
 <body>
   <h1>NanoPitch Student Leaderboard</h1>
   <p class="subtitle">
-    2 submissions &nbsp;·&nbsp; Last updated: 2026-04-10 &nbsp;·&nbsp;
+    2 submissions &nbsp;·&nbsp; Last updated: 2026-04-16 &nbsp;·&nbsp;
     Realtime Viterbi decoder &nbsp;·&nbsp;
     <a href="LEADERBOARD.md">Static MD table</a>
   </p>
+
+  <h2>Rankings</h2>
+  <div class="card">
+    <p style="font-size:0.82rem;color:#666;margin:0 0 0.8rem">
+      Click any column header to sort. Click again to reverse. Default: RPA Clean, best first.
+    </p>
+    <div class="table-wrap">
+      <table id="leaderTable">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 
   <h2>Summary — 4 Key Metrics</h2>
   <div class="grid-2">
@@ -140,8 +182,105 @@ const D = {
   "ger_macro": [
     8.11,
     9.8
+  ],
+  "table_rows": [
+    {
+      "name": "Charis NoiseAugBaseline",
+      "note": "Baseline run with default hyperparameters, and the baseline noise augmentation (gru_size=96, cond_size=64, lr=1e-3).",
+      "rpa_clean": 96.61,
+      "rpa_macro": 91.89,
+      "ger_clean": 3.39,
+      "ger_macro": 8.11,
+      "vdr_clean": 62.71,
+      "vdr_macro": 58.84,
+      "vad_clean": 97.29,
+      "vad_macro": 94.83
+    },
+    {
+      "name": "Charis Test",
+      "note": "Baseline run with default hyperparameters (gru_size=96, cond_size=64, lr=1e-3).",
+      "rpa_clean": 94.82,
+      "rpa_macro": 90.2,
+      "ger_clean": 5.18,
+      "ger_macro": 9.8,
+      "vdr_clean": 82.71,
+      "vdr_macro": 66.25,
+      "vad_clean": 98.34,
+      "vad_macro": 87.15
+    }
   ]
 };
+
+// ── sortable table ────────────────────────────────────────────────────────────
+
+const COLS = [
+  { key: "name",      label: "Student",       fmt: v => v,                  lower: null  },
+  { key: "rpa_clean", label: "RPA Clean",     fmt: v => v.toFixed(1) + "%", lower: false },
+  { key: "rpa_macro", label: "RPA Macro Avg", fmt: v => v.toFixed(1) + "%", lower: false },
+  { key: "ger_clean", label: "GER Clean",     fmt: v => v.toFixed(1) + "%", lower: true  },
+  { key: "ger_macro", label: "GER Macro Avg", fmt: v => v.toFixed(1) + "%", lower: true  },
+  { key: "vdr_clean", label: "VDR Clean",     fmt: v => v.toFixed(1) + "%", lower: false },
+  { key: "vdr_macro", label: "VDR Macro Avg", fmt: v => v.toFixed(1) + "%", lower: false },
+  { key: "vad_clean", label: "VAD Acc Clean", fmt: v => v.toFixed(1) + "%", lower: false },
+  { key: "vad_macro", label: "VAD Acc Macro", fmt: v => v.toFixed(1) + "%", lower: false },
+  { key: "note",      label: "Note",          fmt: v => v,                  lower: null  },
+];
+
+// suffix shown in the header when column is not active
+const HINT = { false: " ↑", true: " ↓", null: "" };
+
+let sortKey = "rpa_clean";
+let sortAsc  = false;   // false = descending = best-first for "higher is better" cols
+
+function renderTable() {
+  // ── header ──
+  const headRow = document.querySelector("#leaderTable thead tr");
+  headRow.innerHTML = COLS.map(c => {
+    const active = c.key === sortKey;
+    const arrow  = active ? (sortAsc ? " ▲" : " ▼") : HINT[c.lower];
+    return `<th data-key="${c.key}"${active ? ' class="active"' : ''}>${c.label}${arrow}</th>`;
+  }).join("");
+
+  // ── body ──
+  const sorted = [...D.table_rows].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "string") return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortAsc ? av - bv : bv - av;
+  });
+
+  document.querySelector("#leaderTable tbody").innerHTML = sorted.map((r, i) => {
+    const swatch = D.colors[D.table_rows.indexOf(r)] || "#aaa";
+    return "<tr>" +
+      `<td class="rank">${i + 1}</td>` +
+      COLS.map(c => {
+        const val = r[c.key];
+        const text = val != null ? c.fmt(val) : "—";
+        if (c.key === "name") return `<td><span class="swatch" style="background:${swatch}"></span>${text}</td>`;
+        if (c.key === "note") return `<td class="note-cell" title="${text}">${text}</td>`;
+        return `<td class="num">${text}</td>`;
+      }).join("") +
+      "</tr>";
+  }).join("");
+}
+
+document.querySelector("#leaderTable thead tr").addEventListener("click", e => {
+  const th = e.target.closest("th[data-key]");
+  if (!th) return;
+  const key = th.dataset.key;
+  if (key === sortKey) {
+    sortAsc = !sortAsc;
+  } else {
+    sortKey = key;
+    const col = COLS.find(c => c.key === key);
+    // default direction: lower-is-better cols sort asc, others desc
+    sortAsc = col.lower === true;
+  }
+  renderTable();
+});
+
+renderTable();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

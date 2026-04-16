@@ -52,11 +52,29 @@ def build_chart_data(entries):
         for m in entries
     ]
 
-    # Summary scalars for the 4 key metrics
+    # Summary scalars for chart bars
     rpa_clean  = [round((get_condition(m, "clean", "realtime_rpa")       or 0) * 100, 2) for m in entries]
     rpa_macro  = [round((macro_avg(m, "realtime_rpa")                    or 0) * 100, 2) for m in entries]
     ger_clean  = [round((get_condition(m, "clean", "realtime_gross_err") or 0) * 100, 2) for m in entries]
     ger_macro  = [round((macro_avg(m, "realtime_gross_err")              or 0) * 100, 2) for m in entries]
+
+    # Flat row objects for the sortable table (all metrics in one place)
+    def pct(v): return round(float(v) * 100, 2) if v is not None else None
+    table_rows = [
+        {
+            "name":      m.get("student_name", m.get("_file", "?")),
+            "note":      m.get("note", ""),
+            "rpa_clean": pct(get_condition(m, "clean", "realtime_rpa")),
+            "rpa_macro": pct(macro_avg(m, "realtime_rpa")),
+            "ger_clean": pct(get_condition(m, "clean", "realtime_gross_err")),
+            "ger_macro": pct(macro_avg(m, "realtime_gross_err")),
+            "vdr_clean": pct(get_condition(m, "clean", "realtime_vdr")),
+            "vdr_macro": pct(macro_avg(m, "realtime_vdr")),
+            "vad_clean": pct(get_condition(m, "clean", "vad_acc")),
+            "vad_macro": pct(macro_avg(m, "vad_acc")),
+        }
+        for m in entries
+    ]
 
     return {
         "labels":      labels,
@@ -68,6 +86,7 @@ def build_chart_data(entries):
         "rpa_macro":   rpa_macro,
         "ger_clean":   ger_clean,
         "ger_macro":   ger_macro,
+        "table_rows":  table_rows,
     }
 
 
@@ -104,6 +123,35 @@ def render_html(data: dict, today: str, n_entries: int) -> str:
     .full-width {{ grid-column: 1 / -1; }}
     .full-width canvas {{ max-height: 320px; }}
     @media (max-width: 700px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
+
+    /* ── sortable table ── */
+    .table-wrap {{ overflow-x: auto; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.88rem; }}
+    thead th {{
+      background: #f0f2f5;
+      padding: 0.55rem 0.8rem;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 2px solid #d0d4da;
+    }}
+    thead th:hover {{ background: #e4e8ee; }}
+    thead th.active {{ background: #dce6f5; color: #1a4a8a; }}
+    tbody tr {{ border-bottom: 1px solid #eee; }}
+    tbody tr:hover {{ background: #f9fbff; }}
+    tbody td {{ padding: 0.5rem 0.8rem; vertical-align: top; }}
+    td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    td.rank {{ text-align: center; color: #888; font-weight: 600; }}
+    td.note-cell {{
+      max-width: 220px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #666;
+    }}
+    .swatch {{ display: inline-block; width: 10px; height: 10px;
+               border-radius: 2px; margin-right: 5px; vertical-align: middle; }}
   </style>
 </head>
 <body>
@@ -113,6 +161,19 @@ def render_html(data: dict, today: str, n_entries: int) -> str:
     Realtime Viterbi decoder &nbsp;·&nbsp;
     <a href="LEADERBOARD.md">Static MD table</a>
   </p>
+
+  <h2>Rankings</h2>
+  <div class="card">
+    <p style="font-size:0.82rem;color:#666;margin:0 0 0.8rem">
+      Click any column header to sort. Click again to reverse. Default: RPA Clean, best first.
+    </p>
+    <div class="table-wrap">
+      <table id="leaderTable">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 
   <h2>Summary — 4 Key Metrics</h2>
   <div class="grid-2">
@@ -148,6 +209,77 @@ def render_html(data: dict, today: str, n_entries: int) -> str:
 
 <script>
 const D = {data_json};
+
+// ── sortable table ────────────────────────────────────────────────────────────
+
+const COLS = [
+  {{ key: "name",      label: "Student",       fmt: v => v,                  lower: null  }},
+  {{ key: "rpa_clean", label: "RPA Clean",     fmt: v => v.toFixed(1) + "%", lower: false }},
+  {{ key: "rpa_macro", label: "RPA Macro Avg", fmt: v => v.toFixed(1) + "%", lower: false }},
+  {{ key: "ger_clean", label: "GER Clean",     fmt: v => v.toFixed(1) + "%", lower: true  }},
+  {{ key: "ger_macro", label: "GER Macro Avg", fmt: v => v.toFixed(1) + "%", lower: true  }},
+  {{ key: "vdr_clean", label: "VDR Clean",     fmt: v => v.toFixed(1) + "%", lower: false }},
+  {{ key: "vdr_macro", label: "VDR Macro Avg", fmt: v => v.toFixed(1) + "%", lower: false }},
+  {{ key: "vad_clean", label: "VAD Acc Clean", fmt: v => v.toFixed(1) + "%", lower: false }},
+  {{ key: "vad_macro", label: "VAD Acc Macro", fmt: v => v.toFixed(1) + "%", lower: false }},
+  {{ key: "note",      label: "Note",          fmt: v => v,                  lower: null  }},
+];
+
+// suffix shown in the header when column is not active
+const HINT = {{ false: " ↑", true: " ↓", null: "" }};
+
+let sortKey = "rpa_clean";
+let sortAsc  = false;   // false = descending = best-first for "higher is better" cols
+
+function renderTable() {{
+  // ── header ──
+  const headRow = document.querySelector("#leaderTable thead tr");
+  headRow.innerHTML = COLS.map(c => {{
+    const active = c.key === sortKey;
+    const arrow  = active ? (sortAsc ? " ▲" : " ▼") : HINT[c.lower];
+    return `<th data-key="${{c.key}}"${{active ? ' class="active"' : ''}}>${{c.label}}${{arrow}}</th>`;
+  }}).join("");
+
+  // ── body ──
+  const sorted = [...D.table_rows].sort((a, b) => {{
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "string") return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortAsc ? av - bv : bv - av;
+  }});
+
+  document.querySelector("#leaderTable tbody").innerHTML = sorted.map((r, i) => {{
+    const swatch = D.colors[D.table_rows.indexOf(r)] || "#aaa";
+    return "<tr>" +
+      `<td class="rank">${{i + 1}}</td>` +
+      COLS.map(c => {{
+        const val = r[c.key];
+        const text = val != null ? c.fmt(val) : "—";
+        if (c.key === "name") return `<td><span class="swatch" style="background:${{swatch}}"></span>${{text}}</td>`;
+        if (c.key === "note") return `<td class="note-cell" title="${{text}}">${{text}}</td>`;
+        return `<td class="num">${{text}}</td>`;
+      }}).join("") +
+      "</tr>";
+  }}).join("");
+}}
+
+document.querySelector("#leaderTable thead tr").addEventListener("click", e => {{
+  const th = e.target.closest("th[data-key]");
+  if (!th) return;
+  const key = th.dataset.key;
+  if (key === sortKey) {{
+    sortAsc = !sortAsc;
+  }} else {{
+    sortKey = key;
+    const col = COLS.find(c => c.key === key);
+    // default direction: lower-is-better cols sort asc, others desc
+    sortAsc = col.lower === true;
+  }}
+  renderTable();
+}});
+
+renderTable();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
